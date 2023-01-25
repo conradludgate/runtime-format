@@ -1,6 +1,6 @@
 [package]
 name = "runtime-format"
-version = "0.1.0"
+version = "0.1.1"
 description = "rust library for formatting dynamic strings"
 repository = "https://github.com/conradludgate/strfmt"
 readme = "README.md"
