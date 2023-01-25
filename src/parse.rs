@@ -16,7 +16,7 @@ impl Default for ParseSegment<'_> {
     }
 }
 
-/// An [`Iterator`] of [`ParseSegment`]s. Returned by of [`str::to_format_segments`](IntoFormatSegments).
+/// An [`Iterator`] of [`ParseSegment`]s. Returned by of [`str::to_parser`](ToFormatParser).
 pub struct FromStr<'a> {
     pub(crate) s: &'a str,
     pub(crate) is_key: bool,

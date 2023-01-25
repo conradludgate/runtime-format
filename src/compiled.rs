@@ -2,6 +2,39 @@ use core::fmt;
 
 use crate::{parse::ParseSegment, FormatArgs, FormatError, FormatKey, ToFormatParser};
 
+/// Preparsed formatting terms.
+/// 
+/// This is faster if you will be using the same format string again and again with
+/// different inputs.
+/// 
+/// ```
+/// use runtime_format::{FormatArgs, FormatKey, FormatKeyError, ParsedFmt};
+/// use core::fmt;
+/// # struct DateTime;
+/// # impl DateTime { fn now() -> Self { Self } }
+/// # impl DateTime { fn day(&self) -> i32 { 25 } fn short_month_name(&self) -> &'static str { "Jan" } fn year(&self) -> i32 { 2023 } }
+/// # impl DateTime { fn hours(&self) -> i32 { 16 } fn minutes(&self) -> i32 { 27 } fn seconds(&self) -> i32 { 53 } }
+/// impl FormatKey for DateTime {
+///     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
+///          // ...
+/// #        use core::fmt::Write;
+/// #        match key {
+/// #            "year"    => write!(f, "{}", self.year()).map_err(FormatKeyError::Fmt),
+/// #            "month"   => write!(f, "{}", self.short_month_name()).map_err(FormatKeyError::Fmt),
+/// #            "day"     => write!(f, "{}", self.day()).map_err(FormatKeyError::Fmt),
+/// #            "hours"   => write!(f, "{}", self.hours()).map_err(FormatKeyError::Fmt),
+/// #            "minutes" => write!(f, "{}", self.minutes()).map_err(FormatKeyError::Fmt),
+/// #            "seconds" => write!(f, "{}", self.seconds()).map_err(FormatKeyError::Fmt),
+/// #            _ => Err(FormatKeyError::UnknownKey),
+/// #        }
+///     }
+/// }
+///
+/// let now = DateTime::now();
+/// let fmt = ParsedFmt::new("{month} {day} {year} {hours}:{minutes}:{seconds}").unwrap();
+/// let args = FormatArgs::new(&fmt, &now);
+/// let expected = "Jan 25 2023 16:27:53";
+/// assert_eq!(args.to_string(), expected);
 pub struct ParsedFmt<'a> {
     segments: tinyvec::TinyVec<[ParseSegment<'a>; 8]>,
 }
@@ -44,6 +77,15 @@ impl<'a> ParsedFmt<'a> {
         }
     }
 
+    /// Return the keys that will be used when formatting.
+    /// 
+    /// ```
+    /// # use runtime_format::ParsedFmt;
+    /// let fmt = "Hello, {recipient}. Hope you are having a nice {time_descriptor}.";
+    /// let parsed = ParsedFmt::new(fmt).unwrap();
+    /// let keys: Vec<_> = parsed.keys().collect();
+    /// assert_eq!(keys, ["recipient", "time_descriptor"]);
+    /// ```
     pub fn keys(&self) -> impl Iterator<Item = &'_ str> {
         self.segments.iter().filter_map(|segment| match segment {
             ParseSegment::Literal(_) => None,

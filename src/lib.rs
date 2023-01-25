@@ -1,24 +1,80 @@
+//! Formatting, but processed at runtime.
 //!
+//! ```
+//! use runtime_format::{FormatArgs, FormatKey, FormatKeyError};
+//! use core::fmt;
+//! # struct DateTime;
+//! # impl DateTime { fn now() -> Self { Self } }
+//! # impl DateTime { fn day(&self) -> i32 { 25 } fn short_month_name(&self) -> &'static str { "Jan" } fn year(&self) -> i32 { 2023 } }
+//! # impl DateTime { fn hours(&self) -> i32 { 16 } fn minutes(&self) -> i32 { 27 } fn seconds(&self) -> i32 { 53 } }
+//! impl FormatKey for DateTime {
+//!     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
+//!         use core::fmt::Write;
+//!         match key {
+//!             "year"    => write!(f, "{}", self.year()).map_err(FormatKeyError::Fmt),
+//!             "month"   => write!(f, "{}", self.short_month_name()).map_err(FormatKeyError::Fmt),
+//!             "day"     => write!(f, "{}", self.day()).map_err(FormatKeyError::Fmt),
+//!             "hours"   => write!(f, "{}", self.hours()).map_err(FormatKeyError::Fmt),
+//!             "minutes" => write!(f, "{}", self.minutes()).map_err(FormatKeyError::Fmt),
+//!             "seconds" => write!(f, "{}", self.seconds()).map_err(FormatKeyError::Fmt),
+//!             _ => Err(FormatKeyError::UnknownKey),
+//!         }
+//!     }
+//! }
+//!
+//! let now = DateTime::now();
+//! let fmt = "{month} {day} {year} {hours}:{minutes}:{seconds}";
+//! let args = FormatArgs::new(fmt, &now);
+//! let expected = "Jan 25 2023 16:27:53";
+//! assert_eq!(args.to_string(), expected);
+//! ```
+//! 
+//! See [`ParsedFmt`] if you need to repeatedly format a given string, but with
+//! different args.
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(feature = "std")]
 mod alloc_impls;
 #[cfg(feature = "std")]
 pub use alloc_impls::*;
-use parse::ParseSegment;
 
 #[cfg(feature = "std")]
-pub mod compiled;
+mod compiled;
+#[cfg(feature = "std")]
+pub use compiled::ParsedFmt;
 
-pub mod parse;
+mod parse;
+pub use parse::{FromStr, ParseSegment};
 
 use core::cell::Cell;
 use core::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
+/// Error produced when formatting
 pub enum FormatKeyError {
+    /// The formatter had an error
     Fmt(fmt::Error),
+    /// The requested key is unknown
     UnknownKey,
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for FormatKeyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            FormatKeyError::Fmt(f) => Some(f),
+            FormatKeyError::UnknownKey => None,
+        }
+    }
+}
+
+impl fmt::Display for FormatKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FormatKeyError::Fmt(_) => f.write_str("There was an error writing to the formatter"),
+            FormatKeyError::UnknownKey => f.write_str("The requested key is unknown"),
+        }
+    }
 }
 
 impl From<fmt::Error> for FormatKeyError {
@@ -66,14 +122,6 @@ pub trait FormatKey {
     /// # Errors
     /// If the formatter returns an error, or if the key is unknown.
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError>;
-
-    // /// Returns false if the key is known at compile time to not be accepted.
-    // ///
-    // /// If the key might be accepted at runtime, this will return true.
-    // fn is_acceptable_key(key: &str) -> bool {
-    //     let _key = key;
-    //     true
-    // }
 }
 
 /// Turn a value into parsed formatting segments on the fly.
@@ -90,11 +138,27 @@ pub trait ToFormatParser<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+/// Error returned when formatting or parsing.
 pub enum FormatError<'a> {
+    /// The key was invalid
     Key(&'a str),
+    /// Could not parse the string
     Parse(&'a str),
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for FormatError<'_> {}
+
+impl fmt::Display for FormatError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FormatError::Key(key) => write!(f, "The requested key {key:?} is unknown"),
+            FormatError::Parse(rest) => write!(f, "Failed to parse {rest:?}"),
+        }
+    }
+}
+
+/// Performs formatting.
 pub struct FormatArgs<'a, FS: ?Sized, FK: ?Sized> {
     format_segments: &'a FS,
     format_keys: &'a FK,
@@ -102,14 +166,16 @@ pub struct FormatArgs<'a, FS: ?Sized, FK: ?Sized> {
 }
 
 impl<'a, FS: ?Sized, FK: ?Sized> FormatArgs<'a, FS, FK> {
-    pub fn new(format_segments: &'a FS, format_keys: &'a FK) -> Self {
+    /// Create a new `FormatArgs` using the format specifier and the format keys
+    pub fn new(format_specified: &'a FS, format_keys: &'a FK) -> Self {
         FormatArgs {
-            format_segments,
+            format_segments: format_specified,
             format_keys,
             error: Cell::new(None),
         }
     }
 
+    /// If there was an error when formatting, then that error is available here.
     pub fn status(&self) -> Result<(), FormatError<'a>> {
         match self.error.take() {
             Some(err) => Err(err),
@@ -145,6 +211,16 @@ where
         } else {
             Ok(())
         }
+    }
+}
+
+impl<'a, FS, FK> fmt::Debug for FormatArgs<'a, FS, FK>
+where
+    FS: ?Sized + ToFormatParser<'a>,
+    FK: ?Sized + FormatKey,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 
