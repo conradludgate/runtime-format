@@ -232,8 +232,105 @@ impl<'a> Iterator for Parser<'a> {
     }
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod tests {
+    use core::fmt::{self, Write};
+
+    use crate::{FormatError, FormatKey, FormatKeyError, Formatter};
+
+    struct WriteShim<'a> {
+        w: &'a mut [u8],
+        n: usize,
+    }
+    impl fmt::Write for WriteShim<'_> {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            let remaining = self.w.len() - self.n;
+            if let Some(prefix) = s.as_bytes().get(..remaining) {
+                self.w[self.n..].copy_from_slice(prefix);
+                self.n = self.w.len();
+                Err(fmt::Error)
+            } else {
+                let n = self.n + s.len();
+                self.w[self.n..n].copy_from_slice(s.as_bytes());
+                self.n = n;
+                Ok(())
+            }
+        }
+    }
+
+    fn format<'a, F: FormatKey>(
+        s: &'a str,
+        fmt: &'a F,
+        f: impl FnOnce(&[u8]),
+    ) -> Result<(), FormatError<'a>> {
+        let mut bytes = WriteShim {
+            w: &mut [0; 1024],
+            n: 0,
+        };
+        let fmt = Formatter::new(s, fmt);
+        let _ = write!(bytes, "{}", fmt);
+        if let Some(err) = fmt.error.take() {
+            return Err(err);
+        }
+
+        f(&bytes.w[..bytes.n]);
+        Ok(())
+    }
+
+    struct Message;
+    impl FormatKey for Message {
+        fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
+            match key {
+                "recipient" => f.write_str("World").map_err(FormatKeyError::Fmt),
+                "time_descriptor" => f.write_str("morning").map_err(FormatKeyError::Fmt),
+                _ => Err(FormatKeyError::UnknownKey),
+            }
+        }
+
+        fn is_acceptable_key(key: &str) -> bool {
+            matches!(key, "recipient" | "time_descriptor")
+        }
+    }
+
+    #[test]
+    fn happy_path() {
+        let format_str = "Hello, {recipient}. Hope you are having a nice {time_descriptor}.";
+        let expected = "Hello, World. Hope you are having a nice morning.";
+        format(format_str, &Message, |output| {
+            assert_eq!(output, expected.as_bytes())
+        }).unwrap();
+    }
+
+    #[test]
+    fn missing_key() {
+        let format_str = "Hello, {recipient}. Hope you are having a nice {time_descriptr}.";
+        assert_eq!(
+            format(format_str, &Message, |_| {}),
+            Err(FormatError::Key("time_descriptr"))
+        );
+    }
+
+    #[test]
+    fn failed_parsing() {
+        let format_str = "Hello, {recipient}. Hope you are having a nice {time_descriptor.";
+        assert_eq!(
+            format(format_str, &Message, |_| {}),
+            Err(FormatError::Parse("time_descriptor."))
+        );
+    }
+
+    #[test]
+    fn escape_brackets() {
+        let format_str = "You can make custom formatting terms using {{foo}!";
+        let expected = "You can make custom formatting terms using {foo}!";
+        format(format_str, &Message, |output| {
+            assert_eq!(output, expected.as_bytes())
+        }).unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod std_tests {
     use core::fmt;
 
     use crate::{CompiledFormatter, FormatError, FormatKey, FormatKeyError};
