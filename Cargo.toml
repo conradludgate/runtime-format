@@ -1,11 +1,17 @@
 [package]
-name = "strfmt"
-version = "0.2.2"
-description = "strfmt: rust library for formatting dynamic strings"
-repository = "https://github.com/vitiral/strfmt"
+name = "runtime-format"
+version = "0.1.0"
+description = "rust library for formatting dynamic strings"
+repository = "https://github.com/conradludgate/strfmt"
 readme = "README.md"
 keywords = ["format", "string", "str", "dynamic", "static"]
-authors = ["Garrett Berg <vitiral@gmail.com>"]
+authors = ["Conrad Ludgate <conradludgate@gmail.com>"]
 license = "MIT"
+edition = "2021"
+
+[features]
+default = ["std"]
+std = ["tinyvec/alloc"]
 
 [dependencies]
+tinyvec = { version = "1.6", optional = true }
