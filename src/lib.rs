@@ -5,12 +5,12 @@
 mod alloc_impls;
 #[cfg(feature = "std")]
 pub use alloc_impls::*;
-use parser::{ParseSegment, Parser};
+use parse::ParseSegment;
 
 #[cfg(feature = "std")]
 pub mod compiled;
 
-mod parser;
+pub mod parse;
 
 use core::cell::Cell;
 use core::fmt;
@@ -28,10 +28,10 @@ impl From<fmt::Error> for FormatKeyError {
 }
 
 /// A trait like [`fmt::Display`] or [`fmt::Debug`] by with a keyed field.
-/// 
-/// It has a `fmt` method that accepts a [`fmt::Formatter`] argument. The important feature is the 
+///
+/// It has a `fmt` method that accepts a [`fmt::Formatter`] argument. The important feature is the
 /// `key` field which indicates what value should be written to the formatter.
-/// 
+///
 /// ```
 /// use runtime_format::{FormatArgs, FormatKey, FormatKeyError};
 /// use core::fmt;
@@ -53,21 +53,39 @@ impl From<fmt::Error> for FormatKeyError {
 ///         }
 ///     }
 /// }
-/// 
+///
 /// let now = DateTime::now();
-/// let args = FormatArgs::new("{month} {day} {year} {hours}:{minutes}:{seconds}", &now);
+/// let fmt = "{month} {day} {year} {hours}:{minutes}:{seconds}";
+/// let args = FormatArgs::new(fmt, &now);
 /// let expected = "Jan 25 2023 16:27:53";
 /// assert_eq!(args.to_string(), expected);
 /// ```
 pub trait FormatKey {
+    /// Write the value with the associated with the given `key` to the formatter.
+    ///
+    /// # Errors
+    /// If the formatter returns an error, or if the key is unknown.
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError>;
 
-    // you might have a hard coded list of strings at compile time. This is useful for
-    // [`CompiledFormatter`] to be able to determine `UnknownKey` errors early
-    fn is_acceptable_key(key: &str) -> bool {
-        let _key = key;
-        true
-    }
+    // /// Returns false if the key is known at compile time to not be accepted.
+    // ///
+    // /// If the key might be accepted at runtime, this will return true.
+    // fn is_acceptable_key(key: &str) -> bool {
+    //     let _key = key;
+    //     true
+    // }
+}
+
+/// Turn a value into parsed formatting segments on the fly.
+pub trait ToFormatParser<'a> {
+    /// The Parser type that returns the [`ParseSegment`]s
+    type Parser: Iterator<Item = ParseSegment<'a>>;
+
+    /// Turn this value into the parser
+    fn to_parser(&'a self) -> Self::Parser;
+    /// Get the unparsed str from this parser.
+    /// Used to determine if there was an error while parsing.
+    fn unparsed(iter: Self::Parser) -> &'a str;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,17 +95,17 @@ pub enum FormatError<'a> {
     Parse(&'a str),
 }
 
-pub struct FormatArgs<'a, F> {
-    s: &'a str,
-    fmt: &'a F,
+pub struct FormatArgs<'a, FS: ?Sized, FK: ?Sized> {
+    format_segments: &'a FS,
+    format_keys: &'a FK,
     error: Cell<Option<FormatError<'a>>>,
 }
 
-impl<'a, F> FormatArgs<'a, F> {
-    pub fn new(s: &'a str, fmt: &'a F) -> Self {
+impl<'a, FS: ?Sized, FK: ?Sized> FormatArgs<'a, FS, FK> {
+    pub fn new(format_segments: &'a FS, format_keys: &'a FK) -> Self {
         FormatArgs {
-            s,
-            fmt,
+            format_segments,
+            format_keys,
             error: Cell::new(None),
         }
     }
@@ -100,16 +118,17 @@ impl<'a, F> FormatArgs<'a, F> {
     }
 }
 
-impl<F: FormatKey> fmt::Display for FormatArgs<'_, F> {
+impl<'a, FS, FK> fmt::Display for FormatArgs<'a, FS, FK>
+where
+    FS: ?Sized + ToFormatParser<'a>,
+    FK: ?Sized + FormatKey,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut segments = Parser {
-            s: self.s,
-            is_key: false,
-        };
+        let mut segments = self.format_segments.to_parser();
         for segment in &mut segments {
             match segment {
                 ParseSegment::Literal(s) => f.write_str(s)?,
-                ParseSegment::Key(key) => match self.fmt.fmt(key, f) {
+                ParseSegment::Key(key) => match self.format_keys.fmt(key, f) {
                     Ok(_) => {}
                     Err(FormatKeyError::Fmt(e)) => return Err(e),
                     Err(FormatKeyError::UnknownKey) => {
@@ -119,8 +138,9 @@ impl<F: FormatKey> fmt::Display for FormatArgs<'_, F> {
                 },
             }
         }
-        if !segments.s.is_empty() {
-            self.error.set(Some(FormatError::Parse(segments.s)));
+        let remaining = FS::unparsed(segments);
+        if !remaining.is_empty() {
+            self.error.set(Some(FormatError::Parse(remaining)));
             Err(fmt::Error)
         } else {
             Ok(())
@@ -132,7 +152,7 @@ impl<F: FormatKey> fmt::Display for FormatArgs<'_, F> {
 mod tests {
     use core::fmt::{self, Write};
 
-    use crate::{FormatError, FormatKey, FormatKeyError, FormatArgs};
+    use crate::{FormatArgs, FormatError, FormatKey, FormatKeyError};
 
     struct WriteShim<'a> {
         w: &'a mut [u8],
@@ -182,10 +202,6 @@ mod tests {
                 _ => Err(FormatKeyError::UnknownKey),
             }
         }
-
-        fn is_acceptable_key(key: &str) -> bool {
-            matches!(key, "recipient" | "time_descriptor")
-        }
     }
 
     #[test]
@@ -224,59 +240,5 @@ mod tests {
             assert_eq!(output, expected.as_bytes())
         })
         .unwrap();
-    }
-}
-
-#[cfg(all(test, feature = "std"))]
-mod std_tests {
-    use core::fmt;
-
-    use crate::{FormatError, FormatKey, FormatKeyError};
-
-    struct Message;
-    impl FormatKey for Message {
-        fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
-            match key {
-                "recipient" => f.write_str("World").map_err(FormatKeyError::Fmt),
-                "time_descriptor" => f.write_str("morning").map_err(FormatKeyError::Fmt),
-                _ => Err(FormatKeyError::UnknownKey),
-            }
-        }
-
-        fn is_acceptable_key(key: &str) -> bool {
-            matches!(key, "recipient" | "time_descriptor")
-        }
-    }
-
-    #[test]
-    fn happy_path() {
-        let format_str = "Hello, {recipient}. Hope you are having a nice {time_descriptor}.";
-        let expected = "Hello, World. Hope you are having a nice morning.";
-        assert_eq!(crate::format(format_str, &Message).unwrap(), expected);
-    }
-
-    #[test]
-    fn missing_key() {
-        let format_str = "Hello, {recipient}. Hope you are having a nice {time_descriptr}.";
-        assert_eq!(
-            crate::format(format_str, &Message),
-            Err(FormatError::Key("time_descriptr"))
-        );
-    }
-
-    #[test]
-    fn failed_parsing() {
-        let format_str = "Hello, {recipient}. Hope you are having a nice {time_descriptor.";
-        assert_eq!(
-            crate::format(format_str, &Message),
-            Err(FormatError::Parse("time_descriptor."))
-        );
-    }
-
-    #[test]
-    fn escape_brackets() {
-        let format_str = "You can make custom formatting terms using {{foo}!";
-        let expected = "You can make custom formatting terms using {foo}!";
-        assert_eq!(crate::format(format_str, &Message).unwrap(), expected);
     }
 }

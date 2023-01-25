@@ -1,16 +1,24 @@
-use core::{cell::Cell, fmt};
+use core::fmt;
 
-use crate::{
-    parser::{ParseSegment, Parser},
-    FormatError, FormatKey, FormatKeyError,
-};
+use crate::{parse::ParseSegment, FormatArgs, FormatError, FormatKey, ToFormatParser};
 
-pub struct Format<'a, F> {
+pub struct ParsedFmt<'a> {
     segments: tinyvec::TinyVec<[ParseSegment<'a>; 8]>,
-    _fmt: core::marker::PhantomData<&'a F>,
 }
 
-impl<F> fmt::Debug for Format<'_, F> {
+impl<'a> ToFormatParser<'a> for ParsedFmt<'a> {
+    type Parser = std::iter::Copied<std::slice::Iter<'a, ParseSegment<'a>>>;
+
+    fn to_parser(&'a self) -> Self::Parser {
+        self.segments.iter().copied()
+    }
+
+    fn unparsed(_: Self::Parser) -> &'a str {
+        ""
+    }
+}
+
+impl fmt::Debug for ParsedFmt<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompiledFormatter")
             .field("segments", &self.segments)
@@ -18,63 +26,42 @@ impl<F> fmt::Debug for Format<'_, F> {
     }
 }
 
-impl<'a, F: FormatKey> Format<'a, F> {
+impl<'a> ParsedFmt<'a> {
+    /// Parse the given format string.
+    ///
+    /// # Errors
+    /// If the string could not be parsed, or there is a key that is unacceptable.
     pub fn new(s: &'a str) -> Result<Self, FormatError<'a>> {
-        let mut segments = Parser { s, is_key: false };
+        let mut segments = s.to_parser();
         let this = Self {
             segments: segments.by_ref().collect(),
-            _fmt: core::marker::PhantomData,
         };
-
-        let mut unknown_keys = this
-            .segments
-            .iter()
-            .filter_map(|segment| match segment {
-                ParseSegment::Literal(_) => None,
-                ParseSegment::Key(key) => Some(key),
-            })
-            .filter(|key| !F::is_acceptable_key(key));
 
         if !segments.s.is_empty() {
             Err(FormatError::Parse(segments.s))
-        } else if let Some(key) = unknown_keys.next() {
-            Err(FormatError::Key(key))
         } else {
             Ok(this)
         }
     }
 
-    pub fn with_args<'b>(&'b self, fmt: &'b F) -> CompiledFmt<'b, F> {
-        CompiledFmt {
-            segments: &self.segments,
-            fmt,
-            error: Cell::new(None),
-        }
+    pub fn keys(&self) -> impl Iterator<Item = &'_ str> {
+        self.segments.iter().filter_map(|segment| match segment {
+            ParseSegment::Literal(_) => None,
+            ParseSegment::Key(key) => Some(*key),
+        })
+    }
+
+    /// Combine this parsed format with the given values into a [`FormatArgs`]
+    pub fn with_args<'b, F: FormatKey>(&'b self, fmt: &'b F) -> FormatArgs<'b, Self, F> {
+        FormatArgs::new(self, fmt)
     }
 }
 
-pub struct CompiledFmt<'a, F> {
-    segments: &'a [ParseSegment<'a>],
-    fmt: &'a F,
-    error: Cell<Option<FormatError<'a>>>,
-}
+impl<'a> TryFrom<&'a str> for ParsedFmt<'a> {
+    type Error = FormatError<'a>;
 
-impl<F: FormatKey> fmt::Display for CompiledFmt<'_, F> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for segment in self.segments {
-            match segment {
-                ParseSegment::Literal(s) => f.write_str(s)?,
-                ParseSegment::Key(key) => match self.fmt.fmt(key, f) {
-                    Ok(_) => {}
-                    Err(FormatKeyError::Fmt(e)) => return Err(e),
-                    Err(FormatKeyError::UnknownKey) => {
-                        self.error.set(Some(FormatError::Key(key)));
-                        return Err(fmt::Error);
-                    }
-                },
-            }
-        }
-        Ok(())
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        Self::new(value)
     }
 }
 
@@ -84,7 +71,7 @@ mod tests {
 
     use crate::{FormatError, FormatKey, FormatKeyError};
 
-    use super::Format;
+    use super::ParsedFmt;
 
     struct Message;
     impl FormatKey for Message {
@@ -95,16 +82,12 @@ mod tests {
                 _ => Err(FormatKeyError::UnknownKey),
             }
         }
-
-        fn is_acceptable_key(key: &str) -> bool {
-            matches!(key, "recipient" | "time_descriptor")
-        }
     }
 
     #[test]
     fn compiled_happy_path() {
         let formatter =
-            Format::new("Hello, {recipient}. Hope you are having a nice {time_descriptor}.")
+            ParsedFmt::new("Hello, {recipient}. Hope you are having a nice {time_descriptor}.")
                 .unwrap();
         let expected = "Hello, World. Hope you are having a nice morning.";
         assert_eq!(formatter.with_args(&Message).to_string(), expected);
@@ -112,19 +95,18 @@ mod tests {
 
     #[test]
     fn compiled_failed_parsing() {
-        let err = Format::<Message>::new(
-            "Hello, {recipient}. Hope you are having a nice {time_descriptor.",
-        )
-        .unwrap_err();
+        let err =
+            ParsedFmt::new("Hello, {recipient}. Hope you are having a nice {time_descriptor.")
+                .unwrap_err();
         assert_eq!(err, FormatError::Parse("time_descriptor."));
     }
 
     #[test]
-    fn compiled_unknown_key() {
-        let err = Format::<Message>::new(
-            "Hello, {recipient}. Hope you are having a nice {time_descriptr}.",
-        )
-        .unwrap_err();
-        assert_eq!(err, FormatError::Key("time_descriptr"));
+    fn compiled_keys() {
+        let parsed =
+            ParsedFmt::new("Hello, {recipient}. Hope you are having a nice {time_descriptr}.")
+                .unwrap();
+        let keys: Vec<_> = parsed.keys().collect();
+        assert_eq!(keys, ["recipient", "time_descriptr"]);
     }
 }
