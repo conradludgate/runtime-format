@@ -3,10 +3,10 @@ use core::fmt;
 use crate::{parse::ParseSegment, FormatArgs, FormatError, FormatKey, ToFormatParser};
 
 /// Preparsed formatting terms.
-/// 
+///
 /// This is faster if you will be using the same format string again and again with
 /// different inputs.
-/// 
+///
 /// ```
 /// use runtime_format::{FormatArgs, FormatKey, FormatKeyError, ParsedFmt};
 /// use core::fmt;
@@ -78,7 +78,7 @@ impl<'a> ParsedFmt<'a> {
     }
 
     /// Return the keys that will be used when formatting.
-    /// 
+    ///
     /// ```
     /// # use runtime_format::ParsedFmt;
     /// let fmt = "Hello, {recipient}. Hope you are having a nice {time_descriptor}.";
@@ -94,7 +94,10 @@ impl<'a> ParsedFmt<'a> {
     }
 
     /// Combine this parsed format with the given values into a [`FormatArgs`]
-    pub fn with_args<'b, F: FormatKey>(&'b self, fmt: &'b F) -> FormatArgs<'b, Self, F> {
+    pub fn with_args<'fs, 'fk, F: FormatKey>(
+        &'fs self,
+        fmt: &'fk F,
+    ) -> FormatArgs<'fs, 'fk, Self, F> {
         FormatArgs::new(self, fmt)
     }
 }

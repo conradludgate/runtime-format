@@ -28,7 +28,7 @@
 //! let expected = "Jan 25 2023 16:27:53";
 //! assert_eq!(args.to_string(), expected);
 //! ```
-//! 
+//!
 //! See [`ParsedFmt`] if you need to repeatedly format a given string, but with
 //! different args.
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -159,15 +159,15 @@ impl fmt::Display for FormatError<'_> {
 }
 
 /// Performs formatting.
-pub struct FormatArgs<'a, FS: ?Sized, FK: ?Sized> {
-    format_segments: &'a FS,
-    format_keys: &'a FK,
-    error: Cell<Option<FormatError<'a>>>,
+pub struct FormatArgs<'fs, 'fk, FS: ?Sized, FK: ?Sized> {
+    format_segments: &'fs FS,
+    format_keys: &'fk FK,
+    error: Cell<Option<FormatError<'fs>>>,
 }
 
-impl<'a, FS: ?Sized, FK: ?Sized> FormatArgs<'a, FS, FK> {
+impl<'fs, 'fk, FS: ?Sized, FK: ?Sized> FormatArgs<'fs, 'fk, FS, FK> {
     /// Create a new `FormatArgs` using the format specifier and the format keys
-    pub fn new(format_specified: &'a FS, format_keys: &'a FK) -> Self {
+    pub fn new(format_specified: &'fs FS, format_keys: &'fk FK) -> Self {
         FormatArgs {
             format_segments: format_specified,
             format_keys,
@@ -176,7 +176,7 @@ impl<'a, FS: ?Sized, FK: ?Sized> FormatArgs<'a, FS, FK> {
     }
 
     /// If there was an error when formatting, then that error is available here.
-    pub fn status(&self) -> Result<(), FormatError<'a>> {
+    pub fn status(&self) -> Result<(), FormatError<'fs>> {
         match self.error.take() {
             Some(err) => Err(err),
             None => Ok(()),
@@ -184,9 +184,9 @@ impl<'a, FS: ?Sized, FK: ?Sized> FormatArgs<'a, FS, FK> {
     }
 }
 
-impl<'a, FS, FK> fmt::Display for FormatArgs<'a, FS, FK>
+impl<'fs, 'fk, FS, FK> fmt::Display for FormatArgs<'fs, 'fk, FS, FK>
 where
-    FS: ?Sized + ToFormatParser<'a>,
+    FS: ?Sized + ToFormatParser<'fs>,
     FK: ?Sized + FormatKey,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -214,9 +214,9 @@ where
     }
 }
 
-impl<'a, FS, FK> fmt::Debug for FormatArgs<'a, FS, FK>
+impl<'fs, 'fk, FS, FK> fmt::Debug for FormatArgs<'fs, 'fk, FS, FK>
 where
-    FS: ?Sized + ToFormatParser<'a>,
+    FS: ?Sized + ToFormatParser<'fs>,
     FK: ?Sized + FormatKey,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

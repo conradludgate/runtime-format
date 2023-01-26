@@ -1,4 +1,4 @@
-use crate::{ToFormatParser};
+use crate::ToFormatParser;
 
 #[derive(Debug, Clone, Copy)]
 /// An enum representing the parsed portion of a format string
