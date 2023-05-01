@@ -110,6 +110,14 @@ impl<'a> TryFrom<&'a str> for ParsedFmt<'a> {
     }
 }
 
+impl<'a> FromIterator<ParseSegment<'a>> for ParsedFmt<'a> {
+    fn from_iter<T: IntoIterator<Item = ParseSegment<'a>>>(iter: T) -> Self {
+        Self {
+            segments: FromIterator::from_iter(iter),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::fmt;
