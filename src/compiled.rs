@@ -147,6 +147,20 @@ mod tests {
     }
 
     #[test]
+    fn compiled_can_pass_up_errors() {
+        fn inner() -> Result<String, Box<dyn std::error::Error>> {
+            let formatter = ParsedFmt::new(
+                "Hello, {recipient}. Hope you are having a nice {time_descriptor}.",
+            )?;
+
+            Ok(formatter.with_args(&Message).to_string())
+        }
+
+        let expected = "Hello, World. Hope you are having a nice morning.";
+        assert_eq!(inner().unwrap(), expected);
+    }
+
+    #[test]
     fn compiled_failed_parsing() {
         let err =
             ParsedFmt::new("Hello, {recipient}. Hope you are having a nice {time_descriptor.")
